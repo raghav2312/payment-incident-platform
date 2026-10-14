@@ -1,0 +1,22 @@
+# Local Python environment
+.venv/
+
+# Python-generated files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Generated logs
+logs/
+*.log
+
+# Editor and operating-system files
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

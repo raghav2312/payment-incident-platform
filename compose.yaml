@@ -1,0 +1,31 @@
+name: payment_incident_platform
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT}:5432"
+    volumes:
+      - payments_data:/var/lib/postgresql/data
+    
+    
+    # The health check runs pg_isready to check whether PostgreSQL accepts connections.
+    # Docker documents this pattern for PostgreSQL readiness checks
+    # CMD-SHELL runs the check through the container’s shell.
+    # -h, -U, and -d specify the host, user, and database.
+    # $$ lets the container resolve those variables.
+    # It checks every 5 seconds, allows 5 seconds per check, and marks the container unhealthy after 5 consecutive failures, with a 10-second startup grace period.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+# The named volume preserves your database across ordinary container removal and recreation.
+volumes:
+  payments_data:
