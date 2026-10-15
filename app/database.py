@@ -2,7 +2,7 @@
 
 from sqlalchemy import URL, create_engine
 
-from app.config import settings
+from app.config import settings                                 #Imported setting object with Postgres login details
 
 
 database_url = URL.create(

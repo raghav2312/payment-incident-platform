@@ -7,7 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 # Validates the information supplied when creating a payment.
-class PaymentCreate(BaseModel):
+class PaymentCreate(BaseModel):                                  #BaseModel: foundation for classes that check and organize the data coming into or going out of your api
     model_config = ConfigDict(
         str_strip_whitespace=True,
         extra="forbid",                                           #rejects unexpected fields. A caller cannot sneak in a status or id.
