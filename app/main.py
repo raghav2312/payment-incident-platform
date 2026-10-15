@@ -3,14 +3,16 @@ from contextlib import asynccontextmanager
 
 from uuid import UUID
 
+from typing import Literal
+
 from sqlalchemy.orm import Session
 
 from app.dependencies import get_db
 from app.models import Payment
 from app.schemas import PaymentCreate, PaymentRead
 
-from fastapi import Depends, FastAPI, HTTPException
-from sqlalchemy import text
+from fastapi import Depends, FastAPI, HTTPException, Query
+from sqlalchemy import text, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.database import engine
@@ -85,11 +87,11 @@ def create_payment(
 
 #Reads the payment from the postgres db
 @app.get(
-    "/payments/{payment_id}",
+    "/payments/{payment_id}",                                           #takes the payment_id from the url
     response_model=PaymentRead,
 )
 def get_payment(
-    payment_id: UUID,
+    payment_id: UUID,                                                   #validates that the supplied id has a valid uuid format. If invlid, recieve 422
     session: Session = Depends(get_db),
 ):
     try:
@@ -108,3 +110,48 @@ def get_payment(
         )
 
     return payment
+
+
+
+
+@app.get("/payments", response_model=list[PaymentRead])                   #The following parameters controls which records are returned
+def list_payments(
+    customer_reference: str | None = Query(                               #exact match for a customer
+        default=None,
+        min_length=1,
+        max_length=100,
+    ),
+    status: Literal["pending", "succeeded", "failed"] | None = None,
+    limit: int = Query(default=20, ge=1, le=100),                         #maximum number of records found
+    offset: int = Query(default=0, ge=0),                                 #number of maching records to skip
+    session: Session = Depends(get_db),
+):
+    statement = select(Payment)
+
+    if customer_reference is not None:
+        statement = statement.where(
+            Payment.customer_reference == customer_reference
+        )
+
+    if status is not None:
+        statement = statement.where(
+            Payment.status == status
+        )
+
+    statement = (
+        statement
+        .order_by(Payment.created_at.desc(), Payment.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+
+    try:
+        payments = session.scalars(statement).all()                       #executes the query and collects the resulting payment
+
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to retrieve payments.",
+        ) from None
+
+    return payments
