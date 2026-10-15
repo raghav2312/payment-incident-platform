@@ -38,3 +38,5 @@ class PaymentRead(BaseModel):
     status: Literal["pending", "succeeded", "failed"]
     created_at: datetime
     updated_at: datetime
+
+

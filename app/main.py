@@ -122,7 +122,7 @@ def list_payments(
         max_length=100,
     ),
     status: Literal["pending", "succeeded", "failed"] | None = None,
-    limit: int = Query(default=20, ge=1, le=100),                         #maximum number of records found
+    limit: int = Query(default=20, ge=1, le=100),                         #maximum number of records returned
     offset: int = Query(default=0, ge=0),                                 #number of maching records to skip
     session: Session = Depends(get_db),
 ):
