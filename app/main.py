@@ -88,7 +88,7 @@ def create_payment(
 #Reads the payment from the postgres db
 @app.get(
     "/payments/{payment_id}",                                           #takes the payment_id from the url
-    response_model=PaymentRead,
+    response_model=PaymentRead,                                         #response model: defines the return format 
 )
 def get_payment(
     payment_id: UUID,                                                   #validates that the supplied id has a valid uuid format. If invlid, recieve 422
