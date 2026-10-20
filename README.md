@@ -174,7 +174,10 @@ app/
   dependencies.py    Per-request database session
   models.py          Database models and constraints
   schemas.py         Request and response validation
-  main.py            FastAPI application and routes
+  main.py            FastAPI setup, router registration, and health routes
+  routers/
+    __init__.py      Router package
+    payments.py     Payment creation, retrieval, and listing routes
 tests/
   conftest.py        Test database setup and fixtures
   test_payments.py   Payment API tests
@@ -188,7 +191,7 @@ requirements-dev.txt Application and test dependencies
 
 ## Planned development
 
-- Refactor routes and business logic into modules.
+- Extract payment business logic into services as functionality grows.
 - Introduce Alembic migrations.
 - Add structured JSON logs and request IDs.
 - Implement durable PostgreSQL-backed idempotency.
