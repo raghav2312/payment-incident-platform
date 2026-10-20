@@ -22,3 +22,4 @@ tzdata==2026.5
 uvicorn==0.54.0                   #Runs FastAPI on Windows; includes extras for development features such as automatic reload.            
 watchfiles==1.3.0
 websockets==17.2
+alembic==1.20.0                  #Tracks and applies database schema migrations.
