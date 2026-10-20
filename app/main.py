@@ -88,7 +88,7 @@ def create_payment(
 #Reads the payment from the postgres db
 @app.get(
     "/payments/{payment_id}",                                           #takes the payment_id from the url
-    response_model=PaymentRead,                                         #response model: defines the return format 
+    response_model=PaymentRead,                                         #response model: defines the return format
 )
 def get_payment(
     payment_id: UUID,                                                   #validates that the supplied id has a valid uuid format. If invlid, recieve 422
@@ -112,8 +112,7 @@ def get_payment(
     return payment
 
 
-
-
+#To return a matching payment data values as per the specific customer, as per their payment status
 @app.get("/payments", response_model=list[PaymentRead])                   #The following parameters controls which records are returned
 def list_payments(
     customer_reference: str | None = Query(                               #exact match for a customer

@@ -1,4 +1,4 @@
-#conftest.py is the shared setup file for your automated tests. 
+#conftest.py is the shared setup file for your automated tests.
 #Pytest finds it automatically, so you don’t have to repeat the same database setup in every test.
 
 import os
@@ -20,7 +20,7 @@ from app.models import Base
 
 #@pytest.fixture: defines setup and cleanup that pytest manages.
 @pytest.fixture(scope="session", autouse=True)                                  #scope="session" runs this once for the entire test run. autouse = True makes it run automatically
-def prepare_test_database():                             
+def prepare_test_database():
     with engine.begin() as connection:                                          #engine.begin() opens a connection and transaction, committing on success or rolling back on an error.
         database_name = connection.execute(
             text("SELECT current_database()")
@@ -55,7 +55,7 @@ def client(prepare_test_database, monkeypatch):                                 
         def override_get_db():                                                  #override_get_db() — supplies a fresh SQLAlchemy session for each request, using this test connection.
             with Session(
                 bind=connection,
-                join_transaction_mode="create_savepoint",                       #create_savepoint — keeps the endpoint’s session.commit() inside the test’s outer transaction. 
+                join_transaction_mode="create_savepoint",                       #create_savepoint — keeps the endpoint’s session.commit() inside the test’s outer transaction.
             ) as session:                                                       #The endpoint can exercise its commit logic while the test retains the ability to undo its changes.
                 yield session
 
@@ -72,3 +72,62 @@ def client(prepare_test_database, monkeypatch):                                 
         finally:
             transaction.rollback()                                              #finally: transaction.rollback() — undoes changes made through those test sessions, even if the test fails.
 
+
+
+
+#inspecting records directly, without an api request
+@pytest.fixture                                                                 #@pytest.fixture makes this setup available to tests that request db_session.
+def db_session(client):                                                         #client tells pytest to prepare your existing client fixture first, including its isolated database transaction.
+    override = app.dependency_overrides[get_db]                                 #app.dependency_overrides[get_db] retrieves the replacement database-session function your client fixture installed.
+
+    yield from override()                                                       #yield from override() supplies that function’s test session and lets it perform its cleanup afterward.
+
+
+
+
+#The direct database session and the API’s sessions are separate session objects sharing the same connection and outer transaction.
+#We’ll commit the sample-data session before making the API request; the outer transaction will still roll everything back after the test.
+
+
+
+# Imagine your payment app is a restaurant:
+# - client is a customer ordering through the waiter—it sends requests through your API.
+# - db_session is someone preparing ingredients in the kitchen—it works directly with the database.
+# Both work in the same temporary restaurant set up for one test.
+
+# 1. client: use the app like a customer
+# response = client.get("/payments")
+
+
+# This asks your API: “Show me the payments.”
+
+# The request goes through your actual endpoint code, which reads the database and returns a response.
+
+# Your client fixture also handles setup and cleanup: it prepares the test connection and rolls back the test’s database changes afterward.
+
+# 2. db_session: prepare data directly
+
+# For the ordering test, we want payments with specific dates:
+# Payment	Created
+# A	Monday
+# B	Wednesday
+# C	Tuesday
+
+
+# We expect the API to return B, C, A—newest first.
+
+# But your POST endpoint automatically sets the creation time. We cannot ask it to create a payment “last Monday.”
+
+# So we use db_session to place those carefully chosen records directly into the test database. Then we use client to ask the API for the list and check its order.
+
+# How does this little function work?
+# @pytest.fixturedef db_session(client):    override = app.dependency_overrides[get_db]    yield from override()
+
+
+# Think of it as three instructions:
+# 1. db_session(client): “Make sure the client’s test setup is ready.”
+# 2. override = ...: “Find the function that provides database sessions using our test connection.”
+# 3. yield from override(): “Use that function to give the test a session, and let it clean up the session afterward.”
+# It creates a separate session using the same test connection, so both ways of accessing the database work with the same test data.
+
+# For our next test: db_session prepares the payments → client requests the list → assertions check the order → the fixtures clean up.
