@@ -81,13 +81,20 @@ Wait until the database service is healthy.
 
 The `payments_data` volume preserves the database between container restarts.
 
-### 4. Create the initial tables
+### 4. Apply database migrations
+
+For a fresh database:
 
 ```powershell
-python create_tables.py
+python -m alembic upgrade head
 ```
 
-This creates missing tables. It does not migrate existing table structures.
+This applies the versioned migrations that create the database tables.
+
+For an existing database previously created using `create_tables.py`,
+verify that its schema matches the baseline before recording it with
+`alembic stamp`. Stamping records a migration version without applying
+its schema changes.
 
 ### 5. Start the API
 
@@ -192,7 +199,6 @@ requirements-dev.txt Application and test dependencies
 ## Planned development
 
 - Extract payment business logic into services as functionality grows.
-- Introduce Alembic migrations.
 - Add structured JSON logs and request IDs.
 - Implement durable PostgreSQL-backed idempotency.
 - Add simulated processing, attempts, and payment event history.
