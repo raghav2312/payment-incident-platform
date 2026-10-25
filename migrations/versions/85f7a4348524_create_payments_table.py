@@ -12,12 +12,12 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '85f7a4348524'
-down_revision: Union[str, Sequence[str], None] = None
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision: str = '85f7a4348524'                                                                  #unique id, identifies your “Create payments table” migration. Alembic uses this ID to track the database’s migration version.
+down_revision: Union[str, Sequence[str], None] = None                                           #identifies the previous migration. its 'None' rn cuz there's no prev revision
+branch_labels: Union[str, Sequence[str], None] = None                                           #gives names to migration branches, which are separate paths of migration development.
+depends_on: Union[str, Sequence[str], None] = None                                              #depends_on specifies additional migrations that must come before this one, beyond the normal previous-revision relationship.
 
-
+#Defining the table for first migration
 def upgrade() -> None:
     op.create_table(
         "payments",
@@ -71,6 +71,7 @@ def upgrade() -> None:
     )
 
 
+#In case alembic needs to reverse the migration
 def downgrade() -> None:
     op.drop_index("ix_payments_status", table_name="payments")
     op.drop_index(

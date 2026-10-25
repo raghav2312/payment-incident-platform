@@ -1,3 +1,6 @@
+#Migrations are saved instructions for building and changing your database structure. We use Alembic to run those instructions and track which ones have been applied.
+
+
 from logging.config import fileConfig
 
 from alembic import context

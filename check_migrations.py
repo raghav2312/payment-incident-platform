@@ -17,9 +17,9 @@ def main():
         )
 
     project_root = Path(__file__).resolve().parent
-    config = Config(str(project_root / "alembic.ini"))
+    config = Config(str(project_root / "alembic.ini"))                                                      #loads alembic configuration as per alembic.ini
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "head")                                                                         #use the migrations/env,py file to bring the db to its latest state/migration
 
 
 if __name__ == "__main__":

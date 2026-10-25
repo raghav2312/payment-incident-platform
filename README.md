@@ -154,8 +154,9 @@ Run the tests:
 python -m pytest tests/test_payments.py -v
 ```
 
-The test setup creates missing test tables, overrides the API's database
-session dependency, and rolls back each test's payment changes.
+The test setup verifies that it targets payments_test_db, applies pending
+Alembic migrations, overrides the API's database session dependency,
+and rolls back each test's payment changes.
 
 The API server does not need to be running: TestClient calls the application
 directly. PostgreSQL must be running.

@@ -16,27 +16,36 @@ if engine.url.database != "payments_test_db":
 import pytest
 from sqlalchemy import text
 
-from app.models import Base
+from pathlib import Path
+
+from alembic import command
+from alembic.config import Config
 
 #@pytest.fixture: defines setup and cleanup that pytest manages.
 @pytest.fixture(scope="session", autouse=True)                                  #scope="session" runs this once for the entire test run. autouse = True makes it run automatically
-def prepare_test_database():
-    with engine.begin() as connection:                                          #engine.begin() opens a connection and transaction, committing on success or rolling back on an error.
-        database_name = connection.execute(
-            text("SELECT current_database()")
-        ).scalar_one()
+def prepare_test_database():                                                    #prepares the payment test db and brings it upto date as per the migrations
+    try:
+        # Verify the actual database before running migrations.
+        with engine.connect() as connection:
+            database_name = connection.execute(
+                text("SELECT current_database()")
+            ).scalar_one()
 
-        if database_name != "payments_test_db":
-            raise RuntimeError(
-                "Refusing to prepare tables outside payments_test_db."
-            )
+            if database_name != "payments_test_db":
+                raise RuntimeError(
+                    "Refusing to run test migrations outside payments_test_db."
+                )
 
-        Base.metadata.create_all(bind=connection)                               #Base.metadata.create_all(...) creates missing tables from your models, including payments. It does not migrate existing tables.
+        # Find alembic.ini in the project root.
+        project_root = Path(__file__).resolve().parents[1]
+        config = Config(str(project_root / "alembic.ini"))
 
-    yield                                                                       #This is the dividing line: “Everything is ready. Here’s the client—run your test. When you finish, I’ll clean up.”
+        # Apply pending migrations before any tests run.
+        command.upgrade(config, "head")
 
-    engine.dispose()
-
+        yield
+    finally:
+        engine.dispose()
 
 
 
