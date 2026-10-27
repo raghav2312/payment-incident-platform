@@ -15,6 +15,9 @@ This application does not move real money or use real banking credentials.
 - Order results by creation time descending, then payment ID descending.
 - Validate request data and enforce database constraints.
 - Run payment API tests against a separate PostgreSQL test database.
+- Generate request IDs and return them in X-Request-ID response headers.
+- Emit JSON application logs with UTC timestamps and request context.
+- Log application startup, shutdown, and application health checks.
 
 Creating a payment currently saves a pending record. It does not process
 the payment.
@@ -151,7 +154,7 @@ Skip this command if the test database already exists.
 Run the tests:
 
 ```powershell
-python -m pytest tests/test_payments.py -v
+python -m pytest tests -v
 ```
 
 The test setup verifies that it targets payments_test_db, applies pending
@@ -161,7 +164,8 @@ and rolls back each test's payment changes.
 The API server does not need to be running: TestClient calls the application
 directly. PostgreSQL must be running.
 
-Current checkpoint: 15 payment API tests passing, covering:
+Current checkpoint: 18 tests passing—15 payment API tests and 3
+request-context/logging tests—covering:
 
 - Payment creation and retrieval.
 - Invalid amounts, currency, and blank customer references.
@@ -169,6 +173,9 @@ Current checkpoint: 15 payment API tests passing, covering:
 - Customer and status filtering.
 - Pagination and query-parameter validation.
 - Creation-time ordering and the payment-ID tie-breaker.
+- Distinct request IDs for separate requests.
+- Request-ID headers on validation-error responses.
+- Matching request IDs in health-check logs and response headers.
 
 The current dependency combination emits a TestClient deprecation warning
 about httpx. Tests pass; dependency compatibility cleanup remains pending.
@@ -183,12 +190,17 @@ app/
   models.py          Database models and constraints
   schemas.py         Request and response validation
   main.py            FastAPI setup, router registration, and health routes
+  logging_config.py  JSON log formatting and application logger setup
+  middleware/
+    __init__.py      Middleware package
+    request_context.py Request-ID context and response headers
   routers/
     __init__.py      Router package
     payments.py     Payment creation, retrieval, and listing routes
 tests/
   conftest.py        Test database setup and fixtures
   test_payments.py   Payment API tests
+  test_request_context.py Request-ID and logging tests
 check_db.py          Database connectivity check
 create_tables.py    Initial table creation
 compose.yaml        PostgreSQL service configuration
@@ -200,7 +212,7 @@ requirements-dev.txt Application and test dependencies
 ## Planned development
 
 - Extract payment business logic into services as functionality grows.
-- Add structured JSON logs and request IDs.
+- Extend logging with payment operations, request durations, and unexpected-error tracking.
 - Implement durable PostgreSQL-backed idempotency.
 - Add simulated processing, attempts, and payment event history.
 - Add investigation SQL and incident management.

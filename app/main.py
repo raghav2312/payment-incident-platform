@@ -7,13 +7,26 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.database import engine
 from app.routers.payments import router as payments_router
+from app.middleware.request_context import RequestContextMiddleware
+
+import logging
+
+from app.logging_config import configure_logging
+
+logger = logging.getLogger("payment_platform")
 
 # @asynccontextmanager lets FastAPI use this function as a lifecycle handler.
 # The application runs while execution pauses at yield; during normal shutdown, engine.dispose() releases pooled database connections.
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    yield
-    engine.dispose()
+async def lifespan(app: FastAPI):                                            #These lifecycle messages will have "request_id": null because startup and shutdown aren’t HTTP requests.
+    configure_logging()
+    logger.info("Application started")
+
+    try:
+        yield
+    finally:
+        engine.dispose()
+        logger.info("Application stopped")
 
 
 app = FastAPI(
@@ -22,11 +35,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(RequestContextMiddleware)                                 #for adding a unique id to the outgoing response for log handling and errors fix
+
 app.include_router(payments_router)
 
 #Checks whether the API can respond
 @app.get("/health")
 def health_check():
+    logger.info("Application health check requested")
     return {"status": "ok"}
 
 
