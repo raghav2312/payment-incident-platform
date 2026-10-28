@@ -4,6 +4,13 @@ from io import StringIO
 from uuid import UUID
 import pytest
 
+import asyncio
+
+from app.middleware.request_context import (
+    RequestContextMiddleware,
+    request_id_context,
+)
+
 #checks that two successful requests receive valid, different tracking IDs.
 def test_requests_receive_distinct_request_ids(client):
     first_response = client.get("/health")
@@ -155,3 +162,75 @@ def test_request_log_includes_response_details(
     assert request_log["status_code"] == expected_status
     assert isinstance(request_log["duration_ms"], (int, float))
     assert request_log["duration_ms"] >= 0
+
+
+#test for "If my application crashes, will my middleware record what happened and clean up properly"
+def test_unhandled_exception_is_logged(client, monkeypatch):
+    logger = logging.getLogger("payment_platform")
+    handler = next(
+        handler
+        for handler in logger.handlers
+        if handler.get_name() == "payment_platform_console"
+    )
+    output = StringIO()
+    observed = {}
+
+    # A fake application that deliberately fails.
+    async def failing_app(scope, receive, send):
+        observed["request_id"] = request_id_context.get()
+        raise RuntimeError("Synthetic test failure")
+
+
+    #receive() and send() function are declared and explained here cuz middleware's interface expects them
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        pass
+
+    async def run_request():
+        previous_id = request_id_context.get()
+        middleware = RequestContextMiddleware(failing_app)                 ## Creates a middleware instance, passing the failing_app function without calling it.
+
+        # The middleware must log the exception and let it propagate.
+        with pytest.raises(RuntimeError, match="Synthetic test failure"):
+            await middleware(
+                {"type": "http", "method": "GET", "path": "/test-error"},
+                receive,
+                send,
+            )
+
+        # Cleanup must happen even when the application fails.
+        assert request_id_context.get() == previous_id                  #This checks that the middleware restored the context after the failure.
+
+    with monkeypatch.context() as patch:
+        patch.setattr(handler, "stream", output)                        #This temporarily directs the logger’s output into our StringIO buffer.
+        asyncio.run(run_request())
+
+    #Convert captured JSON text into dictionaries
+    log_entries = [
+        json.loads(line)
+        for line in output.getvalue().splitlines()
+        if line.strip()
+    ]
+
+
+    #This keeps only entries with that exact message, filtering out the request-finished log.
+    error_logs = [
+        entry
+        for entry in log_entries
+        if entry.get("message")
+        == "Unhandled exception while handling HTTP request"
+    ]
+
+    assert len(error_logs) == 1
+    error_log = error_logs[0]
+
+    assert error_log["level"] == "ERROR"
+    assert UUID(error_log["request_id"]).version == 4
+    assert error_log["request_id"] == observed["request_id"]
+    assert error_log["method"] == "GET"
+    assert error_log["path"] == "/test-error"
+    assert error_log["status_code"] is None
+    assert "Traceback" in error_log["exception"]
+    assert "RuntimeError: Synthetic test failure" in error_log["exception"]

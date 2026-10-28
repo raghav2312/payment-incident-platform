@@ -29,6 +29,10 @@ class JsonFormatter(logging.Formatter):
             if hasattr(record, field):
                 log_entry[field] = getattr(record, field)
 
+        # Include the traceback when the log record contains an exception.
+        if record.exc_info:                                                         # Checks whether the log record contains exception details.
+            log_entry["exception"] = self.formatException(record.exc_info)          #self.formatException(...) turns it into readable traceback showing the error and the code locations
+
         return json.dumps(log_entry)                                               #return the log_entry in the form of json string
 
 

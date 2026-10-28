@@ -65,6 +65,21 @@ class RequestContextMiddleware:
         try:
             # Pass the request onward, using our wrapper to send its response.
             await self.app(scope, receive, send_with_request_id)
+
+        #in case there's an exception, it will be raised. the formatter will convert its format to json, displaying its method, path and status_code
+        #normal handled errors, such as validation 422, wont enter this exception block
+        except Exception:
+            logger.exception(
+                "Unhandled exception while handling HTTP request",
+                extra={
+                    "method": scope["method"],
+                    "path": scope["path"],
+                    "status_code": status_code,
+                },
+            )
+            raise
+
+
         finally:
             duration_ms = (perf_counter() - started_at) * 1000
 
