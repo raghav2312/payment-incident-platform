@@ -18,6 +18,7 @@ This application does not move real money or use real banking credentials.
 - Generate request IDs and return them in X-Request-ID response headers.
 - Emit JSON application logs with UTC timestamps and request context.
 - Log application startup, shutdown, and application health checks.
+- Log HTTP request method, path, response status, and duration in milliseconds.
 
 Creating a payment currently saves a pending record. It does not process
 the payment.
@@ -164,8 +165,8 @@ and rolls back each test's payment changes.
 The API server does not need to be running: TestClient calls the application
 directly. PostgreSQL must be running.
 
-Current checkpoint: 18 tests passing—15 payment API tests and 3
-request-context/logging tests—covering:
+Current checkpoint: 20 test cases passing—15 payment API cases and 5
+request-context/logging cases—covering:
 
 - Payment creation and retrieval.
 - Invalid amounts, currency, and blank customer references.
@@ -176,6 +177,7 @@ request-context/logging tests—covering:
 - Distinct request IDs for separate requests.
 - Request-ID headers on validation-error responses.
 - Matching request IDs in health-check logs and response headers.
+- Request-log fields for successful responses and validation errors.
 
 The current dependency combination emits a TestClient deprecation warning
 about httpx. Tests pass; dependency compatibility cleanup remains pending.
@@ -212,7 +214,7 @@ requirements-dev.txt Application and test dependencies
 ## Planned development
 
 - Extract payment business logic into services as functionality grows.
-- Extend logging with payment operations, request durations, and unexpected-error tracking.
+- Extend logging with payment operations and unexpected-error tracking.
 - Implement durable PostgreSQL-backed idempotency.
 - Add simulated processing, attempts, and payment event history.
 - Add investigation SQL and incident management.

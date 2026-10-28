@@ -20,9 +20,14 @@ class JsonFormatter(logging.Formatter):
             ).isoformat(),
             "level": record.levelname,
             "logger": record.name,
-            "message": record.getMessage(),                                        #record.getMessage(): combines the message template and the payment_id
+            "message": record.getMessage(),                                        #record.getMessage(): combines the message template and the argument
             "request_id": request_id_context.get(),                                #reads the request.id from the current execution context (added by the middleware)
         }
+
+        # Include these details when the logging call supplies them.
+        for field in ("method", "path", "status_code", "duration_ms"):
+            if hasattr(record, field):
+                log_entry[field] = getattr(record, field)
 
         return json.dumps(log_entry)                                               #return the log_entry in the form of json string
 

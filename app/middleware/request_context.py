@@ -5,8 +5,13 @@
 from contextvars import ContextVar
 from uuid import uuid4
 
+import logging
+from time import perf_counter
+
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+logger = logging.getLogger("payment_platform")
 
 
 # ContextVar lets different parts of the code read the current request's ID
@@ -36,6 +41,9 @@ class RequestContextMiddleware:
             await self.app(scope, receive, send)
             return
 
+        started_at = perf_counter()       #stores the stopwatch's starting reading, to measure how long does the api take to measure the request
+        status_code: int | None = None    #starts at None cuz the application hasn't produced a response yet
+
         request_id = str(uuid4())
 
         # Set the current ID. The token remembers the previous context state.
@@ -43,8 +51,11 @@ class RequestContextMiddleware:
 
         # Intercept outgoing response messages to attach the tracking ID.
         async def send_with_request_id(message: Message) -> None:
+            nonlocal status_code
+
             # Response headers are sent in the http.response.start message.
             if message["type"] == "http.response.start":
+                status_code = message["status"]             #to record the status of the returned msg: 200/404/422
                 headers = MutableHeaders(scope=message)
                 headers["X-Request-ID"] = request_id
 
@@ -55,8 +66,22 @@ class RequestContextMiddleware:
             # Pass the request onward, using our wrapper to send its response.
             await self.app(scope, receive, send_with_request_id)
         finally:
-            # Restore the previous context even if handling the request fails.
-            request_id_context.reset(token)
+            duration_ms = (perf_counter() - started_at) * 1000
+
+            try:
+                logger.info(
+                    "HTTP request finished",
+                    extra={                                      #attaches the four fields to the log record. the formatter now knows how to include them in json
+                        "method": scope["method"],               #method: HTTP action (GET/ POST)
+                        "path": scope["path"],                   #path: part of the url identifying the endpoint
+                        "status_code": status_code,
+                        "duration_ms": round(duration_ms, 2),
+                    }
+                )
+
+            finally:
+                # Restore the previous context even if handling the request fails.
+                request_id_context.reset(token)
 
 
 # Imagine a school reception desk:
