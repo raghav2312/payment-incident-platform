@@ -1,4 +1,6 @@
-#This file adds a uniques uuid to each api request for error tracking and log handling
+# A request is a message someone sends to your API asking it to do something.
+# We store a tracking ID temporarily, not the whole request.
+# Like a restaurant ticket number, the ID helps us find related logs.
 
 from contextvars import ContextVar
 from uuid import uuid4
@@ -6,7 +8,11 @@ from uuid import uuid4
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-#This creates a context-specific place to hold each request’s tracking ID. default=None means no ID has been assigned yet.
+
+# ContextVar lets different parts of the code read the current request's ID
+# without passing it into every function.
+# The middleware sets it before handling the request and resets it afterward.
+# The same ID is returned in the X-Request-ID response header.
 request_id_context: ContextVar[str | None] = ContextVar(
     "request_id",
     default=None,
@@ -15,32 +21,56 @@ request_id_context: ContextVar[str | None] = ContextVar(
 
 class RequestContextMiddleware:
     def __init__(self, app: ASGIApp):
+        # Save the next application or middleware in the chain.
         self.app = app
 
+    # Runs when the middleware instance is called to handle an ASGI scope.
     async def __call__(
         self,
-        scope: Scope,
-        receive: Receive,
-        send: Send,
+        scope: Scope,      # Information such as the request's method and path.
+        receive: Receive,  # Reads incoming ASGI messages.
+        send: Send,        # Sends outgoing ASGI messages.
     ) -> None:
+        # Pass non-HTTP scopes, such as application lifecycle events, onward.
         if scope["type"] != "http":
-            await self.app(scope, receive, send)                                         #The .set() method returns a token that remembers the previous context state.
+            await self.app(scope, receive, send)
             return
 
         request_id = str(uuid4())
+
+        # Set the current ID. The token remembers the previous context state.
         token = request_id_context.set(request_id)
 
-        async def send_with_request_id(message: Message) -> None:                        #ASGI  sends an https response using msg. two types of msg: https.response.start and http.response.body
+        # Intercept outgoing response messages to attach the tracking ID.
+        async def send_with_request_id(message: Message) -> None:
+            # Response headers are sent in the http.response.start message.
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
                 headers["X-Request-ID"] = request_id
 
+            # Forward every response message to the original send function.
             await send(message)
 
         try:
-            await self.app(scope, receive, send_with_request_id)                         #sending the api request onto the outgoing response with the new id
+            # Pass the request onward, using our wrapper to send its response.
+            await self.app(scope, receive, send_with_request_id)
         finally:
-            request_id_context.reset(token)                                              #This matters because we don't want a request ID accidentally remaining in a context after its request has finished.
+            # Restore the previous context even if handling the request fails.
+            request_id_context.reset(token)
 
 
-# Even if process_payment() raises an error, cleanup() still executes.
+# Imagine a school reception desk:
+# - Router: "You're asking about payments? Go to the payment function."
+# - Middleware: "Here's tracking number abc123 for this visit."
+# - ContextVar: Keeps that number available while staff handle the visit.
+# - Logs: Record events, labelled with the current request's tracking number.
+
+# Normal HTTP request flow:
+# 1. An HTTP request arrives.
+# 2. Middleware checks that it is HTTP.
+# 3. A UUID is generated and stored in the current execution context.
+# 4. FastAPI handles the request, such as a payment or health-check request.
+# 5. Outgoing response messages pass through our wrapper.
+# 6. The wrapper adds X-Request-ID when the response headers are sent.
+# 7. Response messages are forwarded to the client.
+# 8. The previous context value is restored when application handling ends.
