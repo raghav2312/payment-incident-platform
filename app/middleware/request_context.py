@@ -46,6 +46,22 @@ class RequestContextMiddleware:
 
         request_id = str(uuid4())
 
+#         Why are we adding request state now?
+
+#         Imagine a request gets ID abc123, then crashes:
+#         1. Middleware stores abc123 in the ContextVar and request state.
+#         2. Your error log reads the ContextVar and records abc123.
+#         3. Middleware resets the ContextVar during cleanup.
+#         4. The outer error handler prepares the 500 response.
+#         5. That handler can still read abc123 from request state and put it in the response header.
+#         Then someone can report:
+#         “My request failed. Its ID was abc123.”
+
+# You can find the matching error log using that ID.
+
+        # Keep the ID available to error handlers for this request.
+        scope.setdefault("state", {})["request_id"] = request_id
+
         # Set the current ID. The token remembers the previous context state.
         token = request_id_context.set(request_id)
 
@@ -114,3 +130,9 @@ class RequestContextMiddleware:
 # 6. The wrapper adds X-Request-ID when the response headers are sent.
 # 7. Response messages are forwarded to the client.
 # 8. The previous context value is restored when application handling ends.
+
+
+# ContextVar vs Request state
+# The two storage locations have different jobs:
+# - ContextVar: lets logging code read the ID without receiving a request object.
+# - Request state: lets an error handler retrieve the ID from the request itself.

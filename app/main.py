@@ -1,7 +1,8 @@
 #This creates two endpoints—URL paths that accept requests and return responses: /health and /health/db
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -37,7 +38,24 @@ app = FastAPI(
 
 app.add_middleware(RequestContextMiddleware)                                 #for adding a unique id to the outgoing response for log handling and errors fix
 
-app.include_router(payments_router)
+app.include_router(payments_router)                                          #Add the payment endpoints defined in payments_router to this FastAPI application.
+
+@app.exception_handler(Exception)                                            #registers a handler for otherwise unhandled exceptions
+async def unexpected_error_handler(
+    request: Request,                                                        #gives access to the failed request, including its saved state
+    exc: Exception,                                                          #the exception. middleware logs them
+) -> JSONResponse:
+    request_id = getattr(request.state, "request_id", None)                  #returns the saved ID, returns None if its unavailable
+
+    headers = {}
+    if request_id is not None:
+        headers["X-Request-ID"] = request_id
+
+    return JSONResponse(                                                     #returns a generic error msg with status 500 and saved tracking id in its header
+        status_code=500,
+        content={"detail": "Internal server error."},
+        headers=headers,
+    )
 
 #Checks whether the API can respond
 @app.get("/health")

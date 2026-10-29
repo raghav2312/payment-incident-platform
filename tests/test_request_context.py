@@ -11,6 +11,12 @@ from app.middleware.request_context import (
     request_id_context,
 )
 
+from fastapi.testclient import TestClient
+
+from app.dependencies import get_db
+from app.main import app
+
+
 #checks that two successful requests receive valid, different tracking IDs.
 def test_requests_receive_distinct_request_ids(client):
     first_response = client.get("/health")
@@ -234,3 +240,61 @@ def test_unhandled_exception_is_logged(client, monkeypatch):
     assert error_log["status_code"] is None
     assert "Traceback" in error_log["exception"]
     assert "RuntimeError: Synthetic test failure" in error_log["exception"]
+
+
+#test for checking if the app crashes unexpectedly, the user gets a safe error response and I get a useful error log with the same request id connecting them
+#deliberately creates a fake failure to check my erro handling code
+def test_unhandled_error_response_includes_request_id(client, monkeypatch):
+    logger = logging.getLogger("payment_platform")
+    handler = next(
+        handler
+        for handler in logger.handlers
+        if handler.get_name() == "payment_platform_console"
+    )
+    output = StringIO()
+
+    # Fail before any database work happens.
+    def failing_get_db():                                                               #temporarily replaces the db dependency and deliberately raises an error before accessing postgres
+        raise RuntimeError("Synthetic database dependency failure")
+
+    #replace the dependency and log destination
+    with monkeypatch.context() as patch:
+        patch.setitem(app.dependency_overrides, get_db, failing_get_db)                 #whenever an endpoint  asks for get_db, use failing_get_db instead
+        patch.setattr(handler, "stream", output)
+
+        with TestClient(app, raise_server_exceptions=False) as error_client:            #Test Client requests the application and triggers the crash
+            response = error_client.get("/payments")
+
+# The sequence for the above commands:
+# 1. The test requests GET /payments.
+# 2. FastAPI tries to resolve the database dependency.
+# 3. The replacement dependency raises RuntimeError.
+# 4. Your application’s error handling should log the failure and return an error response.
+
+    assert response.status_code == 500                                                  #checks that the client receives a safe response
+    assert response.json() == {"detail": "Internal server error."}
+    assert "Synthetic database dependency failure" not in response.text                 #checks that the internal exception doesnot appear in the response
+
+    request_id = response.headers["X-Request-ID"]
+    assert UUID(request_id).version == 4
+
+    log_entries = [
+        json.loads(line)
+        for line in output.getvalue().splitlines()
+        if line.strip()
+    ]
+
+    error_logs = [                                                                      #assign error_logs only those entries where the message produced by unhandled-exception handler
+        entry
+        for entry in log_entries
+        if entry.get("message")
+        == "Unhandled exception while handling HTTP request"
+    ]
+
+    assert len(error_logs) == 1
+    assert error_logs[0]["request_id"] == request_id
+    assert (
+        "RuntimeError: Synthetic database dependency failure"
+        in error_logs[0]["exception"]
+    )
+#Passing this test means this simulated failure returns a safe 500 response, includes a valid request ID, and produces exactly one matching error log with the underlying exception details.
