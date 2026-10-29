@@ -1,4 +1,4 @@
-#Payment validation, defining payment request and response schemas
+#Payment validation, defining api's payment request and response schemas
 
 from datetime import datetime
 from decimal import Decimal

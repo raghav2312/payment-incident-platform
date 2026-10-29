@@ -3,6 +3,12 @@
 
 import os
 
+from uuid import uuid4
+
+from sqlalchemy import delete
+
+from app.models import IdempotencyRequest, Payment
+
 # Select the test database before importing application modules.
 os.environ["POSTGRES_DB"] = "payments_test_db"
 
@@ -140,3 +146,76 @@ def db_session(client):                                                         
 # It creates a separate session using the same test connection, so both ways of accessing the database work with the same test data.
 
 # For our next test: db_session prepares the payments → client requests the list → assertions check the order → the fixtures clean up.
+
+
+
+
+
+
+
+# Here’s how this differs from client:
+# - Separate sessions: overlapping requests can use separate database connections.
+# - Real commits: there’s no outer transaction trapping the service’s commits.
+# - Unique test identifiers: each test gets its own customer reference and key.
+# - Targeted cleanup: we delete only records belonging to that test, removing the idempotency record before its referenced payment.
+# - Database guards: setup and cleanup both verify payments_test_db.
+# Concurrency tests will request concurrency_client only, not the existing client or db_session fixtures.
+
+@pytest.fixture
+def concurrency_client(prepare_test_database, monkeypatch):
+    # Verify the actual database before allowing real commits.
+    with engine.connect() as connection:
+        database_name = connection.execute(
+            text("SELECT current_database()")
+        ).scalar_one()
+
+        if database_name != "payments_test_db":
+            raise RuntimeError(
+                "Concurrency tests must use payments_test_db."
+            )
+
+    unique_suffix = uuid4().hex
+    customer_reference = f"concurrency_{unique_suffix}"
+    idempotency_key = f"concurrency-{unique_suffix}"
+
+    def override_get_db():
+        # Each request receives its own session.
+        with Session(engine) as session:
+            yield session
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setitem(
+                app.dependency_overrides,
+                get_db,
+                override_get_db,
+            )
+
+            with TestClient(app) as test_client:
+                yield {
+                    "client": test_client,
+                    "customer_reference": customer_reference,
+                    "idempotency_key": idempotency_key,
+                }
+    finally:
+        # Delete only this test's records, in foreign-key order.
+        with engine.begin() as connection:
+            database_name = connection.execute(
+                text("SELECT current_database()")
+            ).scalar_one()
+
+            if database_name != "payments_test_db":
+                raise RuntimeError(
+                    "Refusing cleanup outside payments_test_db."
+                )
+
+            connection.execute(
+                delete(IdempotencyRequest).where(
+                    IdempotencyRequest.key == idempotency_key
+                )
+            )
+            connection.execute(
+                delete(Payment).where(
+                    Payment.customer_reference == customer_reference
+                )
+            )

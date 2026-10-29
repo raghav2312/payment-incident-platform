@@ -1,11 +1,10 @@
-#Routers folder groups files containing the API routes
+#Routers folder groups files containing the API routes; for HTTP requests
 #This file will hold 3 payment routes
 
 
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -13,6 +12,13 @@ from sqlalchemy.orm import Session
 from app.dependencies import get_db
 from app.models import Payment
 from app.schemas import PaymentCreate, PaymentRead
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+
+from app.services.payments import (
+    IdempotencyConflictError,
+    create_payment_with_idempotency,
+)
 
 
 router = APIRouter()                                                    #creates a collection of routes that we’ll connect to your main FastAPI application.
@@ -24,27 +30,35 @@ router = APIRouter()                                                    #creates
 )
 def create_payment(
     payment_data: PaymentCreate,                                        #Tells FastAPI to validate the request body before running the function. Invalid input normally receives 422.
+    idempotency_key: str | None = Header(
+        default=None,
+        alias="Idempotency-Key",
+        min_length=1,
+        max_length=100,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    ),
     session: Session = Depends(get_db),                                 #Asks FastAPI to obtain a database session using our dependency.
 ):
-    payment = Payment(                                                  #Builds a Python payment object using the validated input.
-        customer_reference=payment_data.customer_reference,
-        amount=payment_data.amount,
-        currency=payment_data.currency,
-    )
-
     try:
-        session.add(payment)                                            #Registers the object with the session for insertion.
-        session.commit()                                                #Flushes the insert to PostgreSQL and commits the transaction.
-        session.refresh(payment)                                        #Reads the saved row back, including generated values such as timestamps.
+        return create_payment_with_idempotency(
+            session=session,
+            payment_data=payment_data,
+            idempotency_key=idempotency_key,
+        )
+
+    except IdempotencyConflictError:
+        session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Idempotency key was already used with different payment details.",
+        )
 
     except SQLAlchemyError:
         session.rollback()
         raise HTTPException(
             status_code=500,
-            detail="Unable to complete the payment creation request.",
+            detail="Unable to complete the payment creation request."
         ) from None
-
-    return payment                                                      #Sends the payment through PaymentRead as a JSON response.
 
 
 #Reads the payment from the postgres db
