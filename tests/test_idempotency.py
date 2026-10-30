@@ -330,6 +330,7 @@ def test_requests_without_key_create_separate_payments(client):
     }
 
 
+#both callers receive the same successful result, and only one payment appears in the payment list.
 def test_concurrent_identical_requests_create_one_payment(
     concurrency_client, monkeypatch
 ):
@@ -344,6 +345,69 @@ def test_concurrent_identical_requests_create_one_payment(
     }
     headers = {"Idempotency-Key": idempotency_key}
 
+    #The first runner must wait. Once the second arrives, both can continue.
+    barrier = Barrier(2, timeout=10)            #Barrier makes threads wait unitl a specified number have reached the same point. 2: wait for two threads. timeout = 10 fail if the required arrival doesnot happen within the timeout
+    original_create = payment_service._create_payment_record
+
+    #     Code	                What the variable holds
+    # saved_function = greet	The function itself
+    # saved_result = greet()	The result of calling the function
+
+    def synchronized_create(session, payment_data):
+        # Both requests must finish their initial key lookup first.
+        barrier.wait()
+        return original_create(session, payment_data)
+
+    #api call to /post/payments
+    def send_request():
+        return test_client.post(
+            "/payments",
+            json=payload,
+            headers=headers,
+        )
+
+    #During this block, calls to payment_service._create_payment_record should use synchronized_create.
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            payment_service,
+            "_create_payment_record",
+            synchronized_create,
+        )
+
+        #*Process starts here.This creates a pool with up to two worker threads, allowing two tasks to run concurrently.
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first_future = executor.submit(send_request)    #Each submit() schedules one call to send_request.
+            second_future = executor.submit(send_request)   #It immediately returns a Future: an object representing a result that may not be ready yet.
+
+            #Although these two lines are sequential, the requests are already running concurrently.
+            # Also, “first” means first submitted; it does not guarantee that request wins the database race.
+
+            first_response = first_future.result(timeout=20)
+            second_response = second_future.result(timeout=20)
+
+    assert first_response.status_code == 201, first_response.text
+    assert second_response.status_code == 201, second_response.text
+    assert first_response.json() == second_response.json()
+
+    #Verify that only one payment exists for this test
+    list_response = test_client.get(
+        "/payments",
+        params={"customer_reference": customer_reference},
+    )
+    assert list_response.status_code == 200, list_response.text
+    assert list_response.json() == [first_response.json()]  #The square brackets matter: they create a list containing exactly one expected payment.
+
+
+
+def test_concurrent_different_requests_return_conflict(
+    concurrency_client, monkeypatch
+):
+    test_client = concurrency_client["client"]
+    customer_reference = concurrency_client["customer_reference"]
+    headers = {
+        "Idempotency-Key": concurrency_client["idempotency_key"]
+    }
+
     barrier = Barrier(2, timeout=10)
     original_create = payment_service._create_payment_record
 
@@ -352,10 +416,14 @@ def test_concurrent_identical_requests_create_one_payment(
         barrier.wait()
         return original_create(session, payment_data)
 
-    def send_request():
+    def send_request(amount):
         return test_client.post(
             "/payments",
-            json=payload,
+            json={
+                "customer_reference": customer_reference,
+                "amount": amount,
+                "currency": "CAD",
+            },
             headers=headers,
         )
 
@@ -367,19 +435,41 @@ def test_concurrent_identical_requests_create_one_payment(
         )
 
         with ThreadPoolExecutor(max_workers=2) as executor:
-            first_future = executor.submit(send_request)
-            second_future = executor.submit(send_request)
+            first_future = executor.submit(send_request, "50.00")
+            second_future = executor.submit(send_request, "75.00")
 
             first_response = first_future.result(timeout=20)
             second_response = second_future.result(timeout=20)
 
-    assert first_response.status_code == 201, first_response.text
-    assert second_response.status_code == 201, second_response.text
-    assert first_response.json() == second_response.json()
+    responses = [
+        (first_response, "50.00"),
+        (second_response, "75.00"),
+    ]
 
+    # Either request can win; exactly one must succeed.
+    assert sorted(
+        response.status_code for response, _ in responses
+    ) == [201, 409], [
+        (response.status_code, response.text)
+        for response, _ in responses
+    ]
+
+    for response, requested_amount in responses:
+        if response.status_code == 201:
+            winning_payment = response.json()
+            assert winning_payment["amount"] == requested_amount
+        else:
+            assert response.json() == {
+                "detail": (
+                    "Idempotency key was already used "
+                    "with different payment details."
+                )
+            }
+
+    # The losing request's payment must have been rolled back.
     list_response = test_client.get(
         "/payments",
         params={"customer_reference": customer_reference},
     )
     assert list_response.status_code == 200, list_response.text
-    assert list_response.json() == [first_response.json()]
+    assert list_response.json() == [winning_payment]
