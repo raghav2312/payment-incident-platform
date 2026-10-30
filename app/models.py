@@ -16,6 +16,8 @@ from typing import Any
 from sqlalchemy import ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
 
+from sqlalchemy import UniqueConstraint
+
 #Creates our own base class. Our upcoming Payment model will inherit from Base, allowing SQLAlchemy to register its table definition.
 class Base(DeclarativeBase):
     pass                                        #Means “no additional code here.” The class inherits the functionality it needs from DeclarativeBase.
@@ -30,8 +32,8 @@ class Payment(Base):
             "amount > 0",
             name="ck_payments_positive_amount",
         ),
-        CheckConstraint(
-            "status IN ('pending', 'succeeded', 'failed')",
+        CheckConstraint(                            #default="pending" unchanged—new payments should still start as pending.
+            "status IN ('pending', 'processing', 'succeeded', 'failed', 'unknown')",
             name="ck_payments_valid_status",
         ),
         CheckConstraint(
@@ -138,6 +140,107 @@ class IdempotencyRequest(Base):
 
     response_status: Mapped[int] = mapped_column(
         nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+#add the payment_attempts model. Each row will record one attempt to process a payment.
+class PaymentAttempt(Base):
+    __tablename__ = "payment_attempts"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "payment_id",
+            "attempt_number",
+            name="uq_payment_attempts_payment_number",
+        ),
+        CheckConstraint(
+            "attempt_number >= 1",
+            name="ck_payment_attempts_positive_number",
+        ),
+        CheckConstraint(
+            "status IN ('processing', 'succeeded', 'failed', 'unknown')",
+            name="ck_payment_attempts_valid_status",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        primary_key=True,
+        default=uuid4,
+    )
+
+    payment_id: Mapped[UUID] = mapped_column(
+        ForeignKey("payments.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+
+    attempt_number: Mapped[int] = mapped_column(
+        nullable=False,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default="processing",
+    )
+
+    # Reference returned by the simulated processor, when available.
+    processor_reference: Mapped[str | None] = mapped_column(
+        String(100),
+    )
+
+    # An outcome code, such as a decline or timeout code.
+    error_code: Mapped[str | None] = mapped_column(
+        String(100),
+    )
+
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+    # Remains empty until this attempt finishes or times out.
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+    )
+
+
+#to record a payment’s history for investigations. An attempt records one processing try
+# For example, one payment could have these event rows:
+# payment_id	event_type	details
+# P1	payment_created	{"amount": "50.00", "currency": "CAD"}
+# P1	processing_started	{"attempt_number": 1}
+# P1	processor_timed_out	{"timeout_seconds": 30}
+class PaymentEvent(Base):
+    __tablename__ = "payment_events"
+
+    id: Mapped[UUID] = mapped_column(
+        primary_key=True,
+        default=uuid4,
+    )
+
+    #The payment_id index helps retrieve a payment’s history.
+    payment_id: Mapped[UUID] = mapped_column(
+        ForeignKey("payments.id", ondelete="RESTRICT"),     #Do not allow payment P1 to be deleted while events still reference it
+        index=True,
+        nullable=False,
+    )
+
+    event_type: Mapped[str] = mapped_column(
+        String(50),
+    )
+
+    # Links the event to the HTTP request that caused it, when available. request_id here refers to the middleware request_id
+    request_id: Mapped[str | None] = mapped_column(
+        String(36),
+    )
+
+    # Structured information describing the event.
+    details: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        default=dict,
     )
 
     created_at: Mapped[datetime] = mapped_column(

@@ -7,6 +7,15 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# Shared list of statuses accepted by payment responses and filters.
+PaymentStatus = Literal[
+    "pending",
+    "processing",
+    "succeeded",
+    "failed",
+    "unknown",
+]
+
 # Validates the information supplied when creating a payment.
 class PaymentCreate(BaseModel):                                   #BaseModel: foundation for classes that check and organize the data coming into or going out of your api
     model_config = ConfigDict(
@@ -36,7 +45,7 @@ class PaymentRead(BaseModel):
     customer_reference: str
     amount: Decimal
     currency: Literal["CAD"]
-    status: Literal["pending", "succeeded", "failed"]
+    status: PaymentStatus
     created_at: datetime
     updated_at: datetime
 

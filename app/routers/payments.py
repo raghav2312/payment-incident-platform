@@ -2,7 +2,7 @@
 #This file will hold 3 payment routes
 
 
-from typing import Literal
+
 from uuid import UUID
 
 from sqlalchemy import select
@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.dependencies import get_db
 from app.models import Payment
-from app.schemas import PaymentCreate, PaymentRead
+from app.schemas import PaymentCreate, PaymentRead, PaymentStatus
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
@@ -96,7 +96,7 @@ def list_payments(
         min_length=1,
         max_length=100,
     ),
-    status: Literal["pending", "succeeded", "failed"] | None = None,
+    status: PaymentStatus | None = None,
     limit: int = Query(default=20, ge=1, le=100),                         #maximum number of records returned
     offset: int = Query(default=0, ge=0),                                 #number of maching records to skip
     session: Session = Depends(get_db),
