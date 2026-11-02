@@ -1,3 +1,6 @@
+# Creates payments and prevents duplicate creation when an idempotency key is reused.
+# Uses SQLAlchemy to handle new requests, saved responses, and database errors.
+# When a key is supplied, one transaction saves the payments table and idempotency tables record together.
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -59,11 +62,9 @@ def find_saved_creation_response(
 
 
 # For a request with an idempotency key, the flow will be:
-# 1. Insert the payment into payments using flush()—still uncommitted.
-# 2. Insert its key, fingerprint, payment ID, and saved response into idempotency_requests.
+# 1. Insert the payment into payments table using flush()—still uncommitted.
+# 2. Insert its key, fingerprint, payment ID, and saved response into idempotency_requests table.
 # 3. Call session.commit() once to save both.
-
-
 def _create_payment_record(
     session: Session,
     payment_data: PaymentCreate,
