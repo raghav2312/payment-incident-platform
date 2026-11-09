@@ -14,6 +14,10 @@ from app.services import payments as payment_service
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
+from uuid import UUID
+from sqlalchemy import select
+from app.models import PaymentEvent
+
 
 def test_equivalent_payment_requests_have_same_fingerprint():
     first = PaymentCreate(
@@ -51,8 +55,9 @@ def test_different_payment_amounts_have_different_fingerprints():
     )
 
 
-
-def test_same_key_and_details_return_original_payment(client):
+#verify that retrying with the same idempotency key does not create another event.
+#We send two HTTP requests, but expect one creation event. The retry gets its own request ID, while the stored event keeps the original request’s ID.
+def test_same_key_and_details_return_original_payment(client, db_session):
     payload = {
         "customer_reference": "idempotency_retry_customer",
         "amount": "50.00",
@@ -87,6 +92,16 @@ def test_same_key_and_details_return_original_payment(client):
     payments = list_response.json()
     assert len(payments) == 1
     assert payments[0]["id"] == first_response.json()["id"]
+
+    events = db_session.scalars(
+        select(PaymentEvent).where(
+            PaymentEvent.payment_id == UUID(first_response.json()["id"])
+        )
+    ).all()
+
+    assert len(events) == 1
+    assert events[0].event_type == "payment_created"
+    assert events[0].request_id == first_response.headers["X-Request-ID"]
 
 
 
@@ -247,7 +262,8 @@ def test_invalid_idempotency_key_creates_no_payment(client, invalid_key):
     assert list_response.json() == []
 
 
-def test_failed_creation_rolls_back_and_allows_retry(client, monkeypatch):
+#to verify that a failed transaction leaves no payment event behind.
+def test_failed_creation_rolls_back_and_allows_retry(client, monkeypatch, db_session):
     payload = {
         "customer_reference": "rollback_customer",
         "amount": "50.00",
@@ -258,7 +274,11 @@ def test_failed_creation_rolls_back_and_allows_retry(client, monkeypatch):
     original_create = payment_service._create_payment_record
 
     def fail_after_insert(session, payment_data):
+
+        #Why flush here? It sends the staged event to PostgreSQL before we deliberately raise the error.
+        #This lets us verify that rollback removes an event actually inserted within the transaction.
         original_create(session, payment_data)
+        session.flush()  # Ensure the insert is sent to the database before raising the error.
         raise SQLAlchemyError("Synthetic failure before commit")
 
     with monkeypatch.context() as patch:
@@ -275,6 +295,17 @@ def test_failed_creation_rolls_back_and_allows_retry(client, monkeypatch):
         )
 
     assert failed_response.status_code == 500, failed_response.text
+    failed_events = db_session.scalars(
+        select(PaymentEvent).where(
+            PaymentEvent.request_id
+            == failed_response.headers["X-Request-ID"]
+        )
+    ).all()
+
+    assert failed_events == []
+
+    # Close this inspection session's transaction before the next request.
+    db_session.commit()
 
     list_response = client.get(
         "/payments",

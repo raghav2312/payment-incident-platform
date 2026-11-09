@@ -5,7 +5,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models import IdempotencyRequest, Payment
+from app.models import IdempotencyRequest, Payment, PaymentEvent
+from app.middleware.request_context import request_id_context
 
 import hashlib
 import json
@@ -78,6 +79,21 @@ def _create_payment_record(
     session.add(payment)                                                                #session.add() registers the payment for insertion.
     session.flush()                                                                     #session.flush() sends the insert to PostgreSQL, but doesn’t commit. We can still roll it back.
     session.refresh(payment)                                                            #session.refresh() reads the stored values, including timestamps and the database-formatted amount.
+
+
+    #Adding payment events to the payment_events table. The event_type is "payment_created" and the details include the amount and currency of the payment.
+    #The request_id is obtained from the request_id_context, which is a context variable that holds the unique identifier for the current request. This allows us to trace the event back to the specific request that created it.
+    session.add(
+        PaymentEvent(
+            payment_id=payment.id,
+            event_type="payment_created",
+            request_id=request_id_context.get(),
+            details={
+                "amount": format(payment.amount, ".2f"),
+                "currency": payment.currency,
+            },
+        )
+    )
 
     response_body = PaymentRead.model_validate(payment).model_dump(                     #PaymentRead.model_validate() checks the payment against our response schema.
         mode="json"                                                                     #model_dump(mode="json") produces a dictionary with JSON-compatible values—for example, UUIDs and timestamps become strings. We can store it in response_body.

@@ -5,9 +5,9 @@ import os
 
 from uuid import uuid4
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
-from app.models import IdempotencyRequest, Payment
+from app.models import IdempotencyRequest, Payment, PaymentEvent
 
 # Select the test database before importing application modules.
 os.environ["POSTGRES_DB"] = "payments_test_db"
@@ -208,12 +208,24 @@ def concurrency_client(prepare_test_database, monkeypatch):
                 raise RuntimeError(
                     "Refusing cleanup outside payments_test_db."
                 )
-
-            connection.execute(
+            
+            # delete the idempotency record first, then the payment events, then the payment itself.
+            connection.execute(                                                        
                 delete(IdempotencyRequest).where(
                     IdempotencyRequest.key == idempotency_key
                 )
             )
+
+            connection.execute(
+                delete(PaymentEvent).where(
+                    PaymentEvent.payment_id.in_(
+                        select(Payment.id).where(
+                            Payment.customer_reference == customer_reference
+                        )
+                    )
+                )
+            )
+
             connection.execute(
                 delete(Payment).where(
                     Payment.customer_reference == customer_reference
