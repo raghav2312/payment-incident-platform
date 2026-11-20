@@ -5,7 +5,6 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models import IdempotencyRequest, Payment, PaymentEvent
 from app.middleware.request_context import request_id_context
 
 import hashlib
@@ -14,6 +13,22 @@ import json
 from app.schemas import PaymentCreate, PaymentRead
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+
+from uuid import UUID, uuid4
+
+from sqlalchemy import select
+
+from app.models import (
+    IdempotencyRequest,
+    Payment,
+    PaymentAttempt,
+    PaymentEvent,
+)
+
+
+from datetime import datetime, timezone
+
+from app.services.processor import ProcessorResult, simulate_payment
 
 
 def create_request_fingerprint(payment_data: PaymentCreate) -> str:
@@ -37,6 +52,13 @@ def create_request_fingerprint(payment_data: PaymentCreate) -> str:
 
 class IdempotencyConflictError(Exception):
     """An existing key was reused with different payment details."""
+
+class PaymentNotFoundError(Exception):
+    """The requested payment does not exist."""
+
+class PaymentProcessingConflictError(Exception):
+    """The payment is not eligible to begin processing."""
+
 
 # Look up a previously completed request by its idempotency key.
 def find_saved_creation_response(
@@ -193,3 +215,182 @@ def create_payment_with_idempotency(
     except SQLAlchemyError:
         session.rollback()
         raise
+
+
+def _finish_payment_processing(
+    session: Session,
+    payment_id: UUID,     #identify the payment and its attempt to update their status and record an event based on the outcome of the processing.   
+    attempt_id: UUID,
+    result: ProcessorResult,
+) -> dict[str, Any]:
+    event_types = {
+        "succeeded": "payment_succeeded",
+        "failed": "payment_failed",
+        "unknown": "payment_outcome_unknown",
+    }
+
+    if result.status not in event_types:
+        raise ValueError("Unsupported processor outcome.")
+
+
+    # Fetch and lock the payment
+    try:
+        payment = session.scalars(
+            select(Payment)
+            .where(Payment.id == payment_id)
+            .with_for_update()      #locks the matching db row until this transaction commits or rolls back
+            .execution_options(populate_existing=True)     #populate_existing=True refreshes any Payment object already held by this session with the queried database values.
+        ).one_or_none()
+
+        if payment is None:
+            raise PaymentNotFoundError("Payment not found.")
+
+        attempt = session.scalars(
+            select(PaymentAttempt)                  #Fetch and lock the correct attempt, making sure both conditions must match
+            .where(
+                PaymentAttempt.id == attempt_id,
+                PaymentAttempt.payment_id == payment_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+
+
+        #check both are still processing. If either is not, raise a conflict error. This prevents a second request from overwriting the first request’s result.
+        if (
+            payment.status != "processing"
+            or attempt is None
+            or attempt.status != "processing"
+        ):
+            raise PaymentProcessingConflictError(
+                "Payment and attempt must both be processing."
+            )
+
+        payment.status = result.status
+        attempt.status = result.status
+        attempt.processor_reference = result.processor_reference
+        attempt.error_code = result.error_code
+        attempt.completed_at = datetime.now(timezone.utc)
+
+        session.add(
+            PaymentEvent(
+                payment_id=payment.id,
+                event_type=event_types[result.status],
+                request_id=request_id_context.get(),
+                details={
+                    "attempt_id": str(attempt.id),
+                    "attempt_number": attempt.attempt_number,
+                    "processor_reference": result.processor_reference,
+                    "error_code": result.error_code,
+                },
+            )
+        )
+
+        session.flush()
+        session.refresh(payment)
+
+        response_body = PaymentRead.model_validate(payment).model_dump(
+            mode="json"
+        )
+
+        session.commit()
+        return response_body
+
+    except (
+        PaymentNotFoundError,
+        PaymentProcessingConflictError,
+        SQLAlchemyError,
+    ):
+        session.rollback()
+        raise
+
+
+
+def _start_payment_processing(
+    session: Session,
+    payment_id: UUID,
+) -> UUID:
+    try:
+        statement = (
+            select(Payment)
+            .where(Payment.id == payment_id)
+            .with_for_update()              #.with_for_update() locks the matching payment row until this transaction ends. Another request trying to lock it must wait.
+            .execution_options(populate_existing=True)      #populate_existing=True refreshes an already-loaded payment object with the values returned by this query.
+        )
+
+        payment = session.scalars(statement).one_or_none()
+
+        if payment is None:
+            raise PaymentNotFoundError("Payment not found.")
+
+
+        # The status check happens while holding the lock. After the first request commits processing, a waiting request sees that status and is rejected.
+        if payment.status != "pending":
+            raise PaymentProcessingConflictError(
+                "Only pending payments can begin processing."
+            )
+
+        attempt_id = uuid4()
+
+        payment.status = "processing"
+
+        session.add(
+            PaymentAttempt(
+                id=attempt_id,
+                payment_id=payment.id,
+                attempt_number=1,
+                status="processing",
+            )
+        )
+
+        session.add(
+            PaymentEvent(
+                payment_id=payment.id,
+                event_type="processing_started",
+                request_id=request_id_context.get(),
+                details={
+                    "attempt_id": str(attempt_id),
+                    "attempt_number": 1,
+                },
+            )
+        )
+
+
+        # One commit saves the status change, attempt, and event together.
+        session.commit()
+        return attempt_id
+#We commit this step before calling the simulator, releasing the database lock and preserving a record that processing began.
+# If the application stops afterward, the payment remains processing for investigation.
+    
+
+    except (
+        PaymentNotFoundError,
+        PaymentProcessingConflictError,
+        SQLAlchemyError,
+    ):
+        session.rollback()
+        raise
+
+
+
+def process_payment(
+    session: Session,                                 #_start_payment_processing() checks that the payment is pending, creates its attempt, and commits the processing state. It returns the attempt’s ID.
+    payment_id: UUID,
+) -> dict[str, Any]:
+    attempt_id = _start_payment_processing(
+        session=session,
+        payment_id=payment_id,
+    )
+
+
+    #simulate_payment() produces the simulated outcome. The start transaction has already committed, so its row lock is released before this call.
+    result = simulate_payment(payment_id)
+
+
+    #_finish_payment_processing() saves the outcome against that payment and attempt, records the event, and returns the payment response.
+    return _finish_payment_processing(
+        session=session,
+        payment_id=payment_id,
+        attempt_id=attempt_id,
+        result=result,
+    )

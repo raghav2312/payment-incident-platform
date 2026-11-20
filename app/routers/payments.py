@@ -17,7 +17,10 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from app.services.payments import (
     IdempotencyConflictError,
+    PaymentNotFoundError,
+    PaymentProcessingConflictError,
     create_payment_with_idempotency,
+    process_payment,
 )
 
 
@@ -131,4 +134,31 @@ def list_payments(
 
     return payments
 
- 
+
+
+@router.post("/payments/{payment_id}/process", response_model=PaymentRead)
+def process_payment_endpoint(
+    payment_id: UUID,
+    session: Session = Depends(get_db),
+):
+    try:
+        return process_payment(session=session, payment_id=payment_id)
+
+    except PaymentNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail="Payment not found.",
+        ) from None
+
+    except PaymentProcessingConflictError:
+        raise HTTPException(
+            status_code=409,
+            detail="Payment cannot be processed in its current state.",
+        ) from None
+
+    except SQLAlchemyError:
+        session.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to complete the payment processing request.",
+        ) from None
