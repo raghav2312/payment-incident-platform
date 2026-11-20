@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -50,3 +50,13 @@ class PaymentRead(BaseModel):
     updated_at: datetime
 
 
+
+class PaymentEventRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    payment_id: UUID
+    event_type: str
+    request_id: str | None
+    details: dict[str, Any]
+    created_at: datetime

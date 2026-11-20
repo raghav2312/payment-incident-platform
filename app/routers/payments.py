@@ -10,9 +10,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.dependencies import get_db
-from app.models import Payment
-from app.schemas import PaymentCreate, PaymentRead, PaymentStatus
-
+from app.models import Payment, PaymentEvent
+from app.schemas import PaymentCreate, PaymentEventRead, PaymentRead, PaymentStatus
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from app.services.payments import (
@@ -161,4 +160,31 @@ def process_payment_endpoint(
         raise HTTPException(
             status_code=500,
             detail="Unable to complete the payment processing request.",
+        ) from None
+
+
+
+@router.get(
+    "/payments/{payment_id}/events",
+    response_model=list[PaymentEventRead],
+)
+def list_payment_events(
+    payment_id: UUID,
+    session: Session = Depends(get_db),
+):
+    try:
+        if session.get(Payment, payment_id) is None:
+            raise HTTPException(status_code=404, detail="Payment not found.")
+
+        statement = (
+            select(PaymentEvent)
+            .where(PaymentEvent.payment_id == payment_id)
+            .order_by(PaymentEvent.created_at.asc(), PaymentEvent.id.asc())
+        )
+        return session.scalars(statement).all()
+
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to retrieve payment events.",
         ) from None
