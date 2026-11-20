@@ -13,6 +13,16 @@ from app.services.payments import (
     process_payment,
 )
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+from unittest.mock import Mock
+from uuid import UUID
+
+from sqlalchemy.orm import Session
+
+from app.database import engine
+from app.services.processor import simulate_payment
+
 
 def test_process_payment_succeeds(db_session):
     # Arrange: create a pending payment.
@@ -303,3 +313,58 @@ def test_process_payment_endpoint_succeeds(client):
 
     assert retrieval_response.status_code == 200
     assert retrieval_response.json()["status"] == "succeeded"
+
+
+
+#Let’s test what happens when a second request arrives while the first payment is still processing. We’ll pause the first request inside the simulator, send the second request for the same payment, and check that it gets 409 Conflict. Then we’ll let the first request finish and verify that PostgreSQL contains exactly one attempt.
+def test_overlapping_processing_requests_create_one_attempt(
+    concurrency_client, monkeypatch
+):
+    client = concurrency_client["client"]
+    created = client.post(
+        "/payments",
+        json={
+            "customer_reference": concurrency_client["customer_reference"],
+            "amount": "25.00",
+            "currency": "CAD",
+        },
+    )
+    assert created.status_code == 201, created.text
+    payment_id = UUID(created.json()["id"])
+    path = f"/payments/{payment_id}/process"
+
+    processor_entered = Event()
+    allow_completion = Event()
+
+    def paused_processor(received_payment_id):
+        processor_entered.set()
+        assert allow_completion.wait(timeout=15), "Simulator was never released"
+        return simulate_payment(received_payment_id)
+
+    processor = Mock(side_effect=paused_processor)
+    monkeypatch.setattr("app.services.payments.simulate_payment", processor)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first_request = pool.submit(client.post, path)
+        try:
+            assert processor_entered.wait(timeout=5), "First request never reached simulator"
+
+            second_request = pool.submit(client.post, path)
+            conflict = second_request.result(timeout=5)
+            assert conflict.status_code == 409, conflict.text
+        finally:
+            allow_completion.set()
+
+        success = first_request.result(timeout=5)
+
+    assert success.status_code == 200, success.text
+    assert success.json()["status"] == "succeeded"
+    processor.assert_called_once_with(payment_id)
+
+    # A fresh session checks what the HTTP requests committed.
+    with Session(engine) as session:
+        attempt = session.scalars(
+            select(PaymentAttempt).where(PaymentAttempt.payment_id == payment_id)
+        ).one()
+        assert attempt.attempt_number == 1
+        assert attempt.status == "succeeded"

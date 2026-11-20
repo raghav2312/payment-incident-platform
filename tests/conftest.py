@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from sqlalchemy import delete, select
 
-from app.models import IdempotencyRequest, Payment, PaymentEvent
+from app.models import IdempotencyRequest, Payment, PaymentEvent, PaymentAttempt
 
 # Select the test database before importing application modules.
 os.environ["POSTGRES_DB"] = "payments_test_db"
@@ -213,6 +213,16 @@ def concurrency_client(prepare_test_database, monkeypatch):
             connection.execute(                                                        
                 delete(IdempotencyRequest).where(
                     IdempotencyRequest.key == idempotency_key
+                )
+            )
+
+            connection.execute(
+                delete(PaymentAttempt).where(
+                    PaymentAttempt.payment_id.in_(
+                        select(Payment.id).where(
+                            Payment.customer_reference == customer_reference
+                        )
+                    )
                 )
             )
 
